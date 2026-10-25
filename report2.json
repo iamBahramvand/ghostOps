@@ -1,0 +1,12 @@
+{
+  "valid_entries": 0,
+  "malformed_lines": 0,
+  "by_level": {
+    "ERROR": 0,
+    "FATAL": 0,
+    "INFO": 0,
+    "WARN": 0
+  },
+  "by_service": {},
+  "incidents": []
+}

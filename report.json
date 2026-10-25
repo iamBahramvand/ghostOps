@@ -1,0 +1,235 @@
+{
+  "valid_entries": 5531,
+  "malformed_lines": 469,
+  "by_level": {
+    "ERROR": 819,
+    "FATAL": 271,
+    "INFO": 3335,
+    "WARN": 1106
+  },
+  "by_service": {
+    "auth-service": 1106,
+    "notification-service": 1130,
+    "order-service": 1082,
+    "payment-service": 1089,
+    "user-service": 1124
+  },
+  "incidents": [
+    {
+      "type": "Database Connectivity",
+      "severity": "FATAL",
+      "total": 271,
+      "first_seen": "2026-10-01T00:52:07Z",
+      "last_seen": "2026-10-06T18:49:45Z",
+      "services": [
+        {
+          "service": "order-service",
+          "count": 63,
+          "first_seen": "2026-10-01T01:50:59Z",
+          "last_seen": "2026-10-06T17:48:56Z"
+        },
+        {
+          "service": "user-service",
+          "count": 57,
+          "first_seen": "2026-10-01T02:19:15Z",
+          "last_seen": "2026-10-06T17:10:16Z"
+        },
+        {
+          "service": "auth-service",
+          "count": 52,
+          "first_seen": "2026-10-01T00:52:07Z",
+          "last_seen": "2026-10-06T18:49:45Z"
+        },
+        {
+          "service": "notification-service",
+          "count": 50,
+          "first_seen": "2026-10-01T03:09:48Z",
+          "last_seen": "2026-10-06T15:21:37Z"
+        },
+        {
+          "service": "payment-service",
+          "count": 49,
+          "first_seen": "2026-10-01T04:39:20Z",
+          "last_seen": "2026-10-06T14:58:35Z"
+        }
+      ]
+    },
+    {
+      "type": "Payment Gateway Failure",
+      "severity": "ERROR",
+      "total": 303,
+      "first_seen": "2026-10-01T00:24:09Z",
+      "last_seen": "2026-10-06T17:59:02Z",
+      "services": [
+        {
+          "service": "payment-service",
+          "count": 162,
+          "first_seen": "2026-10-01T00:24:58Z",
+          "last_seen": "2026-10-06T17:19:29Z"
+        },
+        {
+          "service": "user-service",
+          "count": 44,
+          "first_seen": "2026-10-01T01:00:07Z",
+          "last_seen": "2026-10-06T16:57:56Z"
+        },
+        {
+          "service": "order-service",
+          "count": 41,
+          "first_seen": "2026-10-01T00:24:09Z",
+          "last_seen": "2026-10-06T12:15:01Z"
+        },
+        {
+          "service": "auth-service",
+          "count": 30,
+          "first_seen": "2026-10-01T02:15:44Z",
+          "last_seen": "2026-10-06T15:42:34Z"
+        },
+        {
+          "service": "notification-service",
+          "count": 26,
+          "first_seen": "2026-10-01T08:49:29Z",
+          "last_seen": "2026-10-06T17:59:02Z"
+        }
+      ]
+    },
+    {
+      "type": "Database Connectivity",
+      "severity": "ERROR",
+      "total": 194,
+      "first_seen": "2026-10-01T01:04:45Z",
+      "last_seen": "2026-10-06T16:45:55Z",
+      "services": [
+        {
+          "service": "auth-service",
+          "count": 55,
+          "first_seen": "2026-10-01T08:20:24Z",
+          "last_seen": "2026-10-06T14:03:00Z"
+        },
+        {
+          "service": "order-service",
+          "count": 49,
+          "first_seen": "2026-10-01T01:46:14Z",
+          "last_seen": "2026-10-06T16:34:44Z"
+        },
+        {
+          "service": "user-service",
+          "count": 47,
+          "first_seen": "2026-10-01T01:04:45Z",
+          "last_seen": "2026-10-06T16:45:17Z"
+        },
+        {
+          "service": "notification-service",
+          "count": 43,
+          "first_seen": "2026-10-01T01:51:04Z",
+          "last_seen": "2026-10-06T16:45:55Z"
+        }
+      ]
+    },
+    {
+      "type": "Unhandled Exception",
+      "severity": "ERROR",
+      "total": 175,
+      "first_seen": "2026-10-01T00:21:46Z",
+      "last_seen": "2026-10-06T17:01:53Z",
+      "services": [
+        {
+          "service": "auth-service",
+          "count": 52,
+          "first_seen": "2026-10-01T04:27:37Z",
+          "last_seen": "2026-10-06T17:01:53Z"
+        },
+        {
+          "service": "user-service",
+          "count": 47,
+          "first_seen": "2026-10-01T04:47:53Z",
+          "last_seen": "2026-10-06T12:59:17Z"
+        },
+        {
+          "service": "notification-service",
+          "count": 39,
+          "first_seen": "2026-10-01T00:44:11Z",
+          "last_seen": "2026-10-06T12:34:59Z"
+        },
+        {
+          "service": "order-service",
+          "count": 37,
+          "first_seen": "2026-10-01T00:21:46Z",
+          "last_seen": "2026-10-06T14:57:57Z"
+        }
+      ]
+    },
+    {
+      "type": "SQL Error",
+      "severity": "ERROR",
+      "total": 147,
+      "first_seen": "2026-10-01T01:52:05Z",
+      "last_seen": "2026-10-06T14:47:58Z",
+      "services": [
+        {
+          "service": "notification-service",
+          "count": 39,
+          "first_seen": "2026-10-01T12:42:39Z",
+          "last_seen": "2026-10-06T10:48:52Z"
+        },
+        {
+          "service": "order-service",
+          "count": 39,
+          "first_seen": "2026-10-01T03:29:21Z",
+          "last_seen": "2026-10-06T13:01:59Z"
+        },
+        {
+          "service": "user-service",
+          "count": 36,
+          "first_seen": "2026-10-01T06:08:24Z",
+          "last_seen": "2026-10-06T14:47:58Z"
+        },
+        {
+          "service": "auth-service",
+          "count": 33,
+          "first_seen": "2026-10-01T01:52:05Z",
+          "last_seen": "2026-10-06T14:00:53Z"
+        }
+      ]
+    },
+    {
+      "type": "Resource Pressure",
+      "severity": "WARN",
+      "total": 298,
+      "first_seen": "2026-10-01T00:06:02Z",
+      "last_seen": "2026-10-06T18:04:30Z",
+      "services": [
+        {
+          "service": "payment-service",
+          "count": 80,
+          "first_seen": "2026-10-01T00:06:02Z",
+          "last_seen": "2026-10-06T17:08:29Z"
+        },
+        {
+          "service": "user-service",
+          "count": 66,
+          "first_seen": "2026-10-01T02:39:52Z",
+          "last_seen": "2026-10-06T17:48:06Z"
+        },
+        {
+          "service": "notification-service",
+          "count": 56,
+          "first_seen": "2026-10-01T04:39:14Z",
+          "last_seen": "2026-10-06T18:04:30Z"
+        },
+        {
+          "service": "auth-service",
+          "count": 50,
+          "first_seen": "2026-10-01T00:11:31Z",
+          "last_seen": "2026-10-06T14:32:39Z"
+        },
+        {
+          "service": "order-service",
+          "count": 46,
+          "first_seen": "2026-10-01T16:53:06Z",
+          "last_seen": "2026-10-06T17:14:56Z"
+        }
+      ]
+    }
+  ]
+}
