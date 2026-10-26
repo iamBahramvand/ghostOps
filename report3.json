@@ -1,6 +1,7 @@
 {
   "valid_entries": 18696,
   "malformed_lines": 1304,
+  "log_days": 55,
   "by_level": {
     "ERROR": 1652,
     "FATAL": 210,
@@ -27,6 +28,11 @@
       "type": "Fatal Error",
       "severity": "FATAL",
       "total": 171,
+      "busiest_day": {
+        "date": "2026-10-15",
+        "count": 8
+      },
+      "average_per_day": 3.1,
       "first_seen": "2026-09-01T09:56:55Z",
       "last_seen": "2026-10-25T19:51:21Z",
       "services": [
@@ -114,6 +120,11 @@
       "type": "Database Connectivity",
       "severity": "FATAL",
       "total": 39,
+      "busiest_day": {
+        "date": "2026-09-04",
+        "count": 3
+      },
+      "average_per_day": 0.7,
       "first_seen": "2026-09-04T04:39:36Z",
       "last_seen": "2026-10-22T02:18:25Z",
       "services": [
@@ -201,6 +212,11 @@
       "type": "Unhandled Exception",
       "severity": "ERROR",
       "total": 203,
+      "busiest_day": {
+        "date": "2026-09-28",
+        "count": 9
+      },
+      "average_per_day": 3.7,
       "first_seen": "2026-09-01T11:24:22Z",
       "last_seen": "2026-10-25T22:19:45Z",
       "services": [
@@ -288,6 +304,11 @@
       "type": "Payment Gateway Failure",
       "severity": "ERROR",
       "total": 199,
+      "busiest_day": {
+        "date": "2026-09-25",
+        "count": 8
+      },
+      "average_per_day": 3.6,
       "first_seen": "2026-09-01T05:58:24Z",
       "last_seen": "2026-10-25T23:34:52Z",
       "services": [
@@ -375,6 +396,11 @@
       "type": "SQL Error",
       "severity": "ERROR",
       "total": 101,
+      "busiest_day": {
+        "date": "2026-09-12",
+        "count": 6
+      },
+      "average_per_day": 1.8,
       "first_seen": "2026-09-01T14:24:17Z",
       "last_seen": "2026-10-24T20:00:04Z",
       "services": [
@@ -462,6 +488,11 @@
       "type": "Database Connectivity",
       "severity": "ERROR",
       "total": 94,
+      "busiest_day": {
+        "date": "2026-09-16",
+        "count": 5
+      },
+      "average_per_day": 1.7,
       "first_seen": "2026-09-01T03:23:47Z",
       "last_seen": "2026-10-24T15:39:34Z",
       "services": [
@@ -549,6 +580,11 @@
       "type": "Resource Pressure",
       "severity": "WARN",
       "total": 235,
+      "busiest_day": {
+        "date": "2026-09-25",
+        "count": 10
+      },
+      "average_per_day": 4.3,
       "first_seen": "2026-09-01T09:31:02Z",
       "last_seen": "2026-10-25T14:37:44Z",
       "services": [

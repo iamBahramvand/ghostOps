@@ -2,6 +2,8 @@
 package analyzer
 
 import (
+	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -74,6 +76,15 @@ type TimeRange struct {
 	LastSeen  time.Time `json:"last_seen"`
 }
 
+// daysCovered counts the calendar days from first to last, both included.
+func (t TimeRange) daysCovered() int {
+	if t.FirstSeen.IsZero() {
+		return 0
+	}
+	day := 24 * time.Hour
+	return int(t.LastSeen.Truncate(day).Sub(t.FirstSeen.Truncate(day))/day) + 1
+}
+
 func (t *TimeRange) extend(ts time.Time) {
 	if t.FirstSeen.IsZero() || ts.Before(t.FirstSeen) {
 		t.FirstSeen = ts
@@ -90,12 +101,21 @@ type ServiceCount struct {
 	TimeRange
 }
 
+// BusiestDay is the calendar day (UTC) with the most entries of an incident.
+type BusiestDay struct {
+	Date  string `json:"date"` // YYYY-MM-DD
+	Count int    `json:"count"`
+}
+
 // Incident groups entries of one type AND one severity level,
 // with a per-service breakdown.
 type Incident struct {
-	Type     string          `json:"type"`
-	Severity logparser.Level `json:"severity"`
-	Total    int             `json:"total"`
+	Type       string          `json:"type"`
+	Severity   logparser.Level `json:"severity"`
+	Total      int             `json:"total"`
+	BusiestDay BusiestDay      `json:"busiest_day"`
+	// AveragePerDay is total divided by the days the whole log covers.
+	AveragePerDay float64 `json:"average_per_day"`
 	TimeRange
 	Services []ServiceCount `json:"services"`
 }
@@ -104,6 +124,7 @@ type Incident struct {
 type Result struct {
 	ValidEntries   int            `json:"valid_entries"`
 	MalformedLines int            `json:"malformed_lines"`
+	LogDays        int            `json:"log_days"` // calendar days covered by valid entries
 	ByLevel        map[string]int `json:"by_level"`
 	ByService      map[string]int `json:"by_service"`
 	Incidents      []Incident     `json:"incidents"`
@@ -122,16 +143,43 @@ type group struct {
 	total int
 	TimeRange
 	services map[string]*ServiceCount
+	perDay   map[int]int // dayKey -> entries; size depends on days, not lines
 }
 
 func newGroup() *group {
-	return &group{services: make(map[string]*ServiceCount)}
+	return &group{
+		services: make(map[string]*ServiceCount),
+		perDay:   make(map[int]int),
+	}
 }
 
 func (g *group) add(e logparser.Entry) {
 	g.total++
 	g.extend(e.Timestamp)
+	g.perDay[dayKey(e.Timestamp)]++
 	g.serviceFor(e.Service).record(e.Timestamp)
+}
+
+// busiestDay returns the day with the most entries. On a tie the earlier
+// day wins, so the result never depends on map iteration order.
+func (g *group) busiestDay() BusiestDay {
+	bestKey, bestCount := 0, 0
+	for key, count := range g.perDay {
+		if count > bestCount || (count == bestCount && key < bestKey) {
+			bestKey, bestCount = key, count
+		}
+	}
+	return BusiestDay{Date: formatDayKey(bestKey), Count: bestCount}
+}
+
+// dayKey turns a time into a small comparable number: 2026-09-25 -> 20260925.
+func dayKey(ts time.Time) int {
+	year, month, day := ts.Date()
+	return year*10000 + int(month)*100 + day
+}
+
+func formatDayKey(key int) string {
+	return fmt.Sprintf("%04d-%02d-%02d", key/10000, key/100%100, key%100)
 }
 
 // serviceFor returns the counter of a service, creating it if needed.
@@ -161,6 +209,7 @@ type Analyzer struct {
 	byLevel   map[string]int
 	byService map[string]int
 	groups    map[groupKey]*group
+	logRange  TimeRange // first and last time of all valid entries
 }
 
 func New(rules []Rule) *Analyzer {
@@ -196,6 +245,7 @@ func (a *Analyzer) countEntry(e logparser.Entry) {
 	a.valid++
 	a.byLevel[e.Level.String()]++
 	a.byService[e.Service]++
+	a.logRange.extend(e.Timestamp)
 }
 
 // firstMatch returns the first rule that matches, or nil.
@@ -224,28 +274,40 @@ func (a *Analyzer) groupFor(key groupKey) *group {
 
 // Result returns a snapshot of everything counted so far.
 func (a *Analyzer) Result() Result {
+	days := a.logRange.daysCovered()
 	return Result{
 		ValidEntries:   a.valid,
 		MalformedLines: a.malformed,
+		LogDays:        days,
 		ByLevel:        a.byLevel,
 		ByService:      a.byService,
-		Incidents:      a.buildIncidents(),
+		Incidents:      a.buildIncidents(days),
 	}
 }
 
-func (a *Analyzer) buildIncidents() []Incident {
+func (a *Analyzer) buildIncidents(logDays int) []Incident {
 	incidents := make([]Incident, 0, len(a.groups)) // never nil: JSON gets [] not null
 	for key, g := range a.groups {
 		incidents = append(incidents, Incident{
 			Type:      key.typ,
 			Severity:  key.level,
-			Total:     g.total,
-			TimeRange: g.TimeRange,
-			Services:  sortedServices(g.services),
+			Total:      g.total,
+			BusiestDay: g.busiestDay(),
+			AveragePerDay: averagePerDay(g.total, logDays),
+			TimeRange:  g.TimeRange,
+			Services:   sortedServices(g.services),
 		})
 	}
 	sortIncidents(incidents)
 	return incidents
+}
+
+// averagePerDay rounds to one decimal place.
+func averagePerDay(total, days int) float64 {
+	if days == 0 {
+		return 0
+	}
+	return math.Round(float64(total)/float64(days)*10) / 10
 }
 
 // sortedServices orders by count (highest first), then by name,

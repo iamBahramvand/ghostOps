@@ -20,51 +20,63 @@ func main() {
 	}
 }
 
+// config holds what the user asked for on the command line.
+type config struct {
+	logPath     string
+	jsonPath    string // empty means no JSON file
+	topServices int    // services per incident in the terminal report
+}
+
 // run only sequences the steps; each step lives in its own function.
 // It returns the first error it meets (nil means success).
 func run() error {
-	logPath, jsonPath, err := parseArgs()
+	cfg, err := parseArgs()
 	if err != nil {
 		return err
 	}
 
-	result, err := analyzeFile(logPath)
+	result, err := analyzeFile(cfg.logPath)
 	if err != nil {
 		return err
 	}
 
-	if err := printReport(result); err != nil {
+	if err := printReport(result, cfg.topServices); err != nil {
 		return err
 	}
-	if jsonPath != "" {
-		return saveJSON(jsonPath, result)
+	if cfg.jsonPath != "" {
+		return saveJSON(cfg.jsonPath, result)
 	}
 	return nil
 }
 
-var errUsage = errors.New("usage: ghostops [-o report.json] <logfile>")
+var errUsage = errors.New("usage: ghostops [-o report.json] [-top N] <logfile>")
 
-// parseArgs reads the command line. Both orders work:
+// parseArgs reads the command line. Flags may come before or after the file:
 //
 //	ghostops -o report.json file.log
 //	ghostops file.log -o report.json
-func parseArgs() (logPath, jsonPath string, err error) {
-	flag.StringVar(&jsonPath, "o", "", "write the report as JSON to this file")
+func parseArgs() (config, error) {
+	var cfg config
+	flag.StringVar(&cfg.jsonPath, "o", "", "write the report as JSON to this file")
+	flag.IntVar(&cfg.topServices, "top", 3, "services listed per incident in the terminal report (0 = all)")
 	flag.Parse()
 
 	if flag.NArg() == 0 {
-		return "", "", errUsage
+		return config{}, errUsage
 	}
-	logPath = flag.Arg(0)
+	cfg.logPath = flag.Arg(0)
 
 	// flag.Parse stops at the file name, so read the flags written after it.
 	if err := flag.CommandLine.Parse(flag.Args()[1:]); err != nil {
-		return "", "", err
+		return config{}, err
 	}
 	if flag.NArg() != 0 {
-		return "", "", errUsage
+		return config{}, errUsage
 	}
-	return logPath, jsonPath, nil
+	if cfg.topServices < 0 {
+		return config{}, errors.New("-top must be 0 or greater")
+	}
+	return cfg, nil
 }
 
 // analyzeFile opens and closes the file; reading is done elsewhere.
@@ -103,8 +115,8 @@ func feedLine(a *analyzer.Analyzer, line string) {
 	a.AddEntry(entry)
 }
 
-func printReport(result analyzer.Result) error {
-	var text report.Reporter = report.TextReporter{}
+func printReport(result analyzer.Result, topServices int) error {
+	var text report.Reporter = report.TextReporter{TopServices: topServices}
 	return text.Write(os.Stdout, result)
 }
 
