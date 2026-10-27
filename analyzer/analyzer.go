@@ -191,7 +191,7 @@ func New(rules []Rule) *Analyzer {
 
 func newLevelCounts() map[string]int {
 	counts := make(map[string]int)
-	for _, level := range logparser.AllLevels {
+	for _, level := range logparser.Levels {
 		counts[level.String()] = 0
 	}
 	return counts

@@ -20,7 +20,7 @@ const (
 
 var levelNames = [...]string{"INFO", "WARN", "ERROR", "FATAL"}
 
-var AllLevels = []Level{Info, Warn, Error, Fatal}
+var Levels = []Level{Info, Warn, Error, Fatal}
 
 func (l Level) String() string {
 	if l < 0 || int(l) >= len(levelNames) {

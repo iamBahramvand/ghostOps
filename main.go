@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"runtime"
+	"strings"
 	"sync"
 
 	"ghostops/analyzer"
@@ -51,26 +52,52 @@ func run() error {
 var errUsage = errors.New("usage: ghostops [-o report.json] [-top N] <logfile>")
 
 func parseArgs() (config, error) {
+	return parseConfig(os.Args[1:])
+}
+
+func parseConfig(args []string) (config, error) {
 	var cfg config
-	flag.StringVar(&cfg.jsonPath, "o", "", "write the report as JSON to this file")
-	flag.IntVar(&cfg.topServices, "top", 3, "services listed per incident in the terminal report (0 = all)")
-	flag.Parse()
-
-	if flag.NArg() == 0 {
-		return config{}, errUsage
-	}
-	cfg.logPath = flag.Arg(0)
-
-	if err := flag.CommandLine.Parse(flag.Args()[1:]); err != nil {
+	flags := flag.NewFlagSet("ghostops", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	flags.StringVar(&cfg.jsonPath, "o", "", "write the report as JSON to this file")
+	flags.IntVar(&cfg.topServices, "top", 3, "services listed per incident in the terminal report (0 = all)")
+	if err := flags.Parse(reorderArgs(args)); err != nil {
 		return config{}, err
 	}
-	if flag.NArg() != 0 {
+
+	if flags.NArg() == 0 {
 		return config{}, errUsage
 	}
+	if flags.NArg() != 1 {
+		return config{}, errUsage
+	}
+	cfg.logPath = flags.Arg(0)
 	if cfg.topServices < 0 {
 		return config{}, errors.New("-top must be 0 or greater")
 	}
 	return cfg, nil
+}
+
+func reorderArgs(args []string) []string {
+	flags := make([]string, 0, len(args))
+	paths := make([]string, 0, 1)
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "-o" || arg == "-top" {
+			flags = append(flags, arg)
+			if i+1 < len(args) {
+				i++
+				flags = append(flags, args[i])
+			}
+			continue
+		}
+		if strings.HasPrefix(arg, "-") {
+			flags = append(flags, arg)
+			continue
+		}
+		paths = append(paths, arg)
+	}
+	return append(flags, paths...)
 }
 
 func analyzeFile(path string) (analyzer.Result, error) {

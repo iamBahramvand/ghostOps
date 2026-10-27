@@ -1,5 +1,18 @@
 # GhostOps
 
+GhostOps is a Go command-line tool for streaming application-log analysis. It validates each line as it is read, calculates summary statistics, detects incidents using ordered rules, and produces terminal and JSON reports without loading the complete log into memory.
+
+## Usage
+
+```bash
+go build -o ghostops .
+./ghostops example.log
+./ghostops example.log -o example.json
+./ghostops -top 5 example.log -o example.json
+```
+
+`-top` controls how many affected services are shown in the terminal report. Its default is 3 and `0` shows all services. The number of parser workers is selected internally from `runtime.GOMAXPROCS(0)`; the user does not need to provide a worker count.
+
 ## Requirements covered
 
 The implementation covers the requirements from the assignment:
@@ -21,6 +34,7 @@ The implementation covers the requirements from the assignment:
 - Group repeated incidents and calculate frequency and time range
 - Produce deterministic output
 - Use only the Go standard library
+- Use goroutines, channels, and `sync.WaitGroup` for concurrent parsing
 
 ## Input format
 
@@ -125,6 +139,20 @@ Singleton incident example:
 
 ## Architecture
 
+## Concurrency design
+
+The command-line interface remains unchanged: the user provides the log path and optional reporting flags. Worker count is an implementation detail selected automatically with `runtime.GOMAXPROCS(0)`. Each pipeline channel has a small buffer sized at twice the worker count; this is queue capacity, not an additional worker count, and it lets the producer and workers absorb short bursts without loading the whole file.
+
+The analysis pipeline has three stages:
+
+1. A producer reads the input with `bufio.Scanner`, assigns an increasing sequence number to each line, and sends `lineJob` values through a channel.
+2. Parser workers receive jobs from that channel and concurrently run `logparser.ParseLine`. Each worker sends a `parsedJob` containing the original sequence number, the parsed entry, or a validation error through a result channel.
+3. The aggregator collects results, temporarily stores out-of-order results in a sequence map, and processes them only when the next sequence number is available. It then updates the analyzer in the original input order.
+
+Channels are closed after their producers finish. A `sync.WaitGroup` waits for all parser workers before the result channel is closed. This prevents lost lines, premature shutdown, and deadlocks. The analyzer itself remains single-owner state, so grouping and deterministic report ordering do not require locks.
+
+The concurrency lesson sample is kept in `concurrency/`.
+
 ### `logparser`
 
 - Defines levels and their severity order
@@ -157,7 +185,7 @@ Singleton incident example:
 
 ## Performance and memory usage
 
-Input is scanned one line at a time. Processed lines are not retained. Analyzer memory depends on the number of rules, services, and aggregate incident groups rather than the total number of physical log lines. This makes the design suitable for large files.
+Input is scanned one line at a time. A producer sends numbered lines through a channel to parser workers. Workers validate lines concurrently and return numbered results through a second channel. The aggregator reorders results by sequence number before updating the order-sensitive analyzer, so concurrency does not change grouping or report order. Processed lines are not retained. Analyzer memory depends on the number of rules, services, aggregate incident groups, and the bounded in-flight channel window rather than the total number of physical log lines.
 
 ## Error handling
 
@@ -217,3 +245,75 @@ Incident groups by type:
 | Unhandled Exception | 43 |
 
 The generated JSON is available at [example.json](./example.json).
+
+## Validation
+
+The following commands complete successfully:
+
+```bash
+gofmt -w analyzer/analyzer.go logparser/parser.go report/report.go main.go
+go test ./...
+go vet ./...
+go run . example.log -o example.json
+go run -race . example.log -o example.json
+```
+
+The project demonstrates streaming input, `io.Reader` usage, parsing and validation, keyword matching, maps and slices, ordered rules, time-based grouping, goroutines, channels, `sync.WaitGroup`, deterministic aggregation, race detection, and error handling. The concurrency lesson sample is kept in `concurrency/`.
+
+## Testing and coverage
+
+Tests use table-driven cases and subtests across the parser, analyzer, reporters, and concurrent reader pipeline. The root package also includes a benchmark for the analysis path.
+
+Run all tests:
+
+```bash
+go test ./...
+```
+
+Run with verbose subtest names:
+
+```bash
+go test -v ./...
+```
+
+Run the race detector:
+
+```bash
+go test -race ./...
+```
+
+Run the analyzer benchmark:
+
+```bash
+go test -bench=. -benchmem .
+```
+
+Show statement coverage per package:
+
+```bash
+go test -cover ./...
+```
+
+Create a coverage profile and inspect the combined total:
+
+```bash
+go test -coverpkg=./... -coverprofile=coverage.out ./...
+go tool cover -func=coverage.out
+```
+
+The last command prints a `total:` line with the overall percentage. Generate an HTML report with:
+
+```bash
+go tool cover -html=coverage.out -o coverage.html
+```
+
+For the project packages only, use this focused profile to avoid counting the teaching sample and the archived `final/` copy:
+
+```bash
+go test -coverprofile=core.out . ./analyzer ./logparser ./report
+go tool cover -func=core.out
+```
+
+The current focused tests cover the main packages at approximately 83.8% for the CLI pipeline, 86.3% for the analyzer, 87.0% for the parser, and 96.4% for reporting, with a combined focused total of about 88.4%. The tests explicitly cover empty input, malformed-only input, missing files, invalid output paths, no-incident reports, and writer failures. Coverage measures executed statements; passing tests and high coverage do not replace assertions about behavior.
+
+

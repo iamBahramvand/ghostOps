@@ -171,8 +171,8 @@ func percent(part, total int) float64 {
 }
 
 func levelNames() []string {
-	names := make([]string, 0, len(logparser.AllLevels))
-	for _, level := range logparser.AllLevels {
+	names := make([]string, 0, len(logparser.Levels))
+	for _, level := range logparser.Levels {
 		names = append(names, level.String())
 	}
 	return names
