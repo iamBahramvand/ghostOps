@@ -1,4 +1,3 @@
-// Package logparser turns raw log lines into validated entries.
 package logparser
 
 import (
@@ -10,7 +9,6 @@ import (
 	"time"
 )
 
-// Level is a severity level, ordered from least to most severe.
 type Level int
 
 const (
@@ -22,7 +20,6 @@ const (
 
 var levelNames = [...]string{"INFO", "WARN", "ERROR", "FATAL"}
 
-// AllLevels lists every level in ascending severity.
 var AllLevels = []Level{Info, Warn, Error, Fatal}
 
 func (l Level) String() string {
@@ -32,20 +29,17 @@ func (l Level) String() string {
 	return levelNames[l]
 }
 
-// MarshalText makes JSON print "ERROR" instead of 2.
 func (l Level) MarshalText() ([]byte, error) {
 	return []byte(l.String()), nil
 }
 
-// Entry is one valid log line.
 type Entry struct {
 	Timestamp time.Time
 	Level     Level
-	Service   string // e.g. "payment-service"
+	Service   string
 	Message   string
 }
 
-// rawLine holds the four pieces of a line before they are validated.
 type rawLine struct {
 	timestamp string
 	level     string
@@ -53,8 +47,6 @@ type rawLine struct {
 	message   string
 }
 
-// ParseLine converts "<time> <LEVEL> <service> <message>" into an Entry.
-// An error means the line is malformed and should be skipped.
 func ParseLine(line string) (Entry, error) {
 	raw, err := splitLine(line)
 	if err != nil {
@@ -63,7 +55,6 @@ func ParseLine(line string) (Entry, error) {
 	return raw.toEntry()
 }
 
-// splitLine cuts a line into four pieces (the message keeps its spaces).
 func splitLine(line string) (rawLine, error) {
 	parts := strings.SplitN(strings.TrimSuffix(line, "\r"), " ", 4)
 	if len(parts) < 4 {
@@ -72,7 +63,6 @@ func splitLine(line string) (rawLine, error) {
 	return rawLine{parts[0], parts[1], parts[2], parts[3]}, nil
 }
 
-// toEntry validates every piece and builds the Entry.
 func (r rawLine) toEntry() (Entry, error) {
 	timestamp, err := parseTimestamp(r.timestamp)
 	if err != nil {
@@ -124,8 +114,6 @@ func parseMessage(text string) (string, error) {
 	return text, nil
 }
 
-// isValidService accepts words joined by "-" (like "auth-service").
-// Any new service name works without a code change.
 func isValidService(name string) bool {
 	for _, word := range strings.Split(name, "-") {
 		if !isLowerWord(word) {
@@ -149,10 +137,8 @@ func isLowerWord(word string) bool {
 	return true
 }
 
-// MaxLineBytes is the longest line the scanner accepts (1 MB).
 const MaxLineBytes = 1 << 20
 
-// NewLineScanner returns a scanner that reads input one line at a time.
 func NewLineScanner(input io.Reader) *bufio.Scanner {
 	scanner := bufio.NewScanner(input)
 	scanner.Buffer(make([]byte, 0, 64*1024), MaxLineBytes)

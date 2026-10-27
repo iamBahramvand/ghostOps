@@ -1,9 +1,7 @@
-// Package analyzer computes statistics and groups entries into incidents.
 package analyzer
 
 import (
-	"fmt"
-	"math"
+	"encoding/json"
 	"sort"
 	"strings"
 	"time"
@@ -11,22 +9,21 @@ import (
 	"ghostops/logparser"
 )
 
-// ---------- Rules ----------
-
-// Rule decides whether an entry belongs to an incident type.
 type Rule interface {
 	Name() string
 	Matches(e logparser.Entry) bool
+	GroupWindow() time.Duration
 }
 
-// keywordRule: level >= minLevel AND the message contains a keyword.
 type keywordRule struct {
 	name     string
 	minLevel logparser.Level
-	keywords []string // lowercase
+	keywords []string
+	window   time.Duration
 }
 
-func (r keywordRule) Name() string { return r.name }
+func (r keywordRule) Name() string               { return r.name }
+func (r keywordRule) GroupWindow() time.Duration { return r.window }
 
 func (r keywordRule) Matches(e logparser.Entry) bool {
 	if e.Level < r.minLevel {
@@ -44,39 +41,32 @@ func containsAny(text string, words []string) bool {
 	return false
 }
 
-// levelRule: the entry has exactly this level, whatever the message says.
 type levelRule struct {
-	name  string
-	level logparser.Level
+	name   string
+	level  logparser.Level
+	window time.Duration
 }
 
 func (r levelRule) Name() string                   { return r.name }
 func (r levelRule) Matches(e logparser.Entry) bool { return e.Level == r.level }
+func (r levelRule) GroupWindow() time.Duration     { return r.window }
 
-// DefaultRules returns the rules in priority order.
-// When rules overlap, the FIRST matching rule wins, so the order is the
-// policy: specific message rules first, the generic FATAL rule last.
 func DefaultRules() []Rule {
 	return []Rule{
-		keywordRule{"Database Connectivity", logparser.Error, []string{"connection pool", "connect to database"}},
-		keywordRule{"SQL Error", logparser.Error, []string{"sql"}},
-		keywordRule{"Payment Gateway Failure", logparser.Error, []string{"payment gateway"}},
-		keywordRule{"Unhandled Exception", logparser.Error, []string{"exception"}},
-		keywordRule{"Resource Pressure", logparser.Warn, []string{"memory usage", "out of memory"}},
-		levelRule{"Fatal Error", logparser.Fatal},
+		keywordRule{"Database Connectivity", logparser.Error, []string{"connection pool", "connect to database"}, 10 * time.Minute},
+		keywordRule{"SQL Error", logparser.Error, []string{"sql"}, 10 * time.Minute},
+		keywordRule{"Payment Gateway Failure", logparser.Error, []string{"payment gateway"}, 10 * time.Minute},
+		keywordRule{"Unhandled Exception", logparser.Error, []string{"exception"}, 10 * time.Minute},
+		keywordRule{"Resource Pressure", logparser.Warn, []string{"memory usage", "out of memory"}, 15 * time.Minute},
+		levelRule{"Fatal Error", logparser.Fatal, 10 * time.Minute},
 	}
 }
 
-// ---------- Result types (what the reports show) ----------
-
-// TimeRange is the earliest and latest time seen. Log lines are not
-// guaranteed to be in order, so both ends are tracked.
 type TimeRange struct {
 	FirstSeen time.Time `json:"first_seen"`
 	LastSeen  time.Time `json:"last_seen"`
 }
 
-// daysCovered counts the calendar days from first to last, both included.
 func (t TimeRange) daysCovered() int {
 	if t.FirstSeen.IsZero() {
 		return 0
@@ -94,95 +84,76 @@ func (t *TimeRange) extend(ts time.Time) {
 	}
 }
 
-// ServiceCount is one service's share of an incident.
 type ServiceCount struct {
 	Service string `json:"service"`
 	Count   int    `json:"count"`
 	TimeRange
 }
 
-// BusiestDay is the calendar day (UTC) with the most entries of an incident.
-type BusiestDay struct {
-	Date  string `json:"date"` // YYYY-MM-DD
-	Count int    `json:"count"`
-}
-
-// Incident groups entries of one type AND one severity level,
-// with a per-service breakdown.
 type Incident struct {
-	Type       string          `json:"type"`
-	Severity   logparser.Level `json:"severity"`
-	Total      int             `json:"total"`
-	BusiestDay BusiestDay      `json:"busiest_day"`
-	// AveragePerDay is total divided by the days the whole log covers.
-	AveragePerDay float64 `json:"average_per_day"`
+	Type     string          `json:"type"`
+	Severity logparser.Level `json:"severity"`
+	Total    int             `json:"total"`
 	TimeRange
 	Services []ServiceCount `json:"services"`
 }
 
-// Result is everything the reporters need.
+func (i Incident) MarshalJSON() ([]byte, error) {
+	type incidentJSON struct {
+		Type             string          `json:"type"`
+		Severity         logparser.Level `json:"severity"`
+		Frequency        *int            `json:"frequency,omitempty"`
+		StartTime        *time.Time      `json:"start_time,omitempty"`
+		EndTime          *time.Time      `json:"end_time,omitempty"`
+		AffectedServices []string        `json:"affected_services"`
+	}
+	services := make([]string, 0, len(i.Services))
+	for _, s := range i.Services {
+		services = append(services, s.Service)
+	}
+	j := incidentJSON{Type: i.Type, Severity: i.Severity, AffectedServices: services}
+	if i.Total > 1 {
+		j.Frequency = &i.Total
+		j.StartTime = &i.FirstSeen
+		j.EndTime = &i.LastSeen
+	}
+	return json.Marshal(j)
+}
+
 type Result struct {
 	ValidEntries   int            `json:"valid_entries"`
 	MalformedLines int            `json:"malformed_lines"`
-	LogDays        int            `json:"log_days"` // calendar days covered by valid entries
+	LogDays        int            `json:"log_days"`
 	ByLevel        map[string]int `json:"by_level"`
 	ByService      map[string]int `json:"by_service"`
 	Incidents      []Incident     `json:"incidents"`
 }
 
-// ---------- Incident groups (internal, built while streaming) ----------
-
-// groupKey says what happened and at which level.
 type groupKey struct {
 	typ   string
 	level logparser.Level
 }
 
-// group collects the entries of one incident.
 type group struct {
-	total int
+	total     int
+	lastEvent time.Time
 	TimeRange
 	services map[string]*ServiceCount
-	perDay   map[int]int // dayKey -> entries; size depends on days, not lines
 }
 
 func newGroup() *group {
 	return &group{
 		services: make(map[string]*ServiceCount),
-		perDay:   make(map[int]int),
 	}
 }
 
 func (g *group) add(e logparser.Entry) {
 	g.total++
+	g.lastEvent = e.Timestamp
 	g.extend(e.Timestamp)
-	g.perDay[dayKey(e.Timestamp)]++
 	g.serviceFor(e.Service).record(e.Timestamp)
 }
 
-// busiestDay returns the day with the most entries. On a tie the earlier
-// day wins, so the result never depends on map iteration order.
-func (g *group) busiestDay() BusiestDay {
-	bestKey, bestCount := 0, 0
-	for key, count := range g.perDay {
-		if count > bestCount || (count == bestCount && key < bestKey) {
-			bestKey, bestCount = key, count
-		}
-	}
-	return BusiestDay{Date: formatDayKey(bestKey), Count: bestCount}
-}
-
-// dayKey turns a time into a small comparable number: 2026-09-25 -> 20260925.
-func dayKey(ts time.Time) int {
-	year, month, day := ts.Date()
-	return year*10000 + int(month)*100 + day
-}
-
-func formatDayKey(key int) string {
-	return fmt.Sprintf("%04d-%02d-%02d", key/10000, key/100%100, key%100)
-}
-
-// serviceFor returns the counter of a service, creating it if needed.
 func (g *group) serviceFor(name string) *ServiceCount {
 	sc := g.services[name]
 	if sc == nil {
@@ -197,19 +168,14 @@ func (s *ServiceCount) record(ts time.Time) {
 	s.extend(ts)
 }
 
-// ---------- Analyzer ----------
-
-// Analyzer is fed one entry at a time. It stores only counters, so its
-// memory depends on the number of services and incident types, not on
-// the size of the log file.
 type Analyzer struct {
 	rules     []Rule
 	valid     int
 	malformed int
 	byLevel   map[string]int
 	byService map[string]int
-	groups    map[groupKey]*group
-	logRange  TimeRange // first and last time of all valid entries
+	groups    map[groupKey][]*group
+	logRange  TimeRange
 }
 
 func New(rules []Rule) *Analyzer {
@@ -217,11 +183,10 @@ func New(rules []Rule) *Analyzer {
 		rules:     rules,
 		byLevel:   newLevelCounts(),
 		byService: make(map[string]int),
-		groups:    make(map[groupKey]*group),
+		groups:    make(map[groupKey][]*group),
 	}
 }
 
-// newLevelCounts starts every level at 0, so the report always lists all four.
 func newLevelCounts() map[string]int {
 	counts := make(map[string]int)
 	for _, level := range logparser.AllLevels {
@@ -237,7 +202,7 @@ func (a *Analyzer) AddMalformed() {
 func (a *Analyzer) AddEntry(e logparser.Entry) {
 	a.countEntry(e)
 	if rule := a.firstMatch(e); rule != nil {
-		a.addToIncident(rule.Name(), e)
+		a.addToIncident(rule, e)
 	}
 }
 
@@ -248,7 +213,6 @@ func (a *Analyzer) countEntry(e logparser.Entry) {
 	a.logRange.extend(e.Timestamp)
 }
 
-// firstMatch returns the first rule that matches, or nil.
 func (a *Analyzer) firstMatch(e logparser.Entry) Rule {
 	for _, rule := range a.rules {
 		if rule.Matches(e) {
@@ -258,60 +222,94 @@ func (a *Analyzer) firstMatch(e logparser.Entry) Rule {
 	return nil
 }
 
-func (a *Analyzer) addToIncident(typ string, e logparser.Entry) {
-	a.groupFor(groupKey{typ, e.Level}).add(e)
-}
-
-// groupFor returns the group of an incident, creating it if needed.
-func (a *Analyzer) groupFor(key groupKey) *group {
-	g := a.groups[key]
-	if g == nil {
-		g = newGroup()
-		a.groups[key] = g
+func (a *Analyzer) addToIncident(rule Rule, e logparser.Entry) {
+	key := groupKey{rule.Name(), e.Level}
+	groups := a.groups[key]
+	matching := make([]int, 0, len(groups))
+	bestIndex, bestGap := -1, time.Duration(1<<63-1)
+	for i, candidate := range groups {
+		gap := distanceToRange(e.Timestamp, candidate.TimeRange)
+		if gap <= rule.GroupWindow() {
+			matching = append(matching, i)
+			if gap < bestGap {
+				bestIndex, bestGap = i, gap
+			}
+		}
 	}
-	return g
+	if bestIndex >= 0 {
+		groups[bestIndex].add(e)
+		for i := len(matching) - 1; i >= 0; i-- {
+			index := matching[i]
+			if index == bestIndex {
+				continue
+			}
+			groups[bestIndex].merge(groups[index])
+			groups = append(groups[:index], groups[index+1:]...)
+			if index < bestIndex {
+				bestIndex--
+			}
+		}
+		a.groups[key] = groups
+		return
+	}
+	g := newGroup()
+	g.add(e)
+	a.groups[key] = append(groups, g)
 }
 
-// Result returns a snapshot of everything counted so far.
+func (g *group) merge(other *group) {
+	g.total += other.total
+	if other.lastEvent.After(g.lastEvent) {
+		g.lastEvent = other.lastEvent
+	}
+	g.extend(other.FirstSeen)
+	g.extend(other.LastSeen)
+	for service, count := range other.services {
+		target := g.serviceFor(service)
+		target.Count += count.Count
+		target.extend(count.FirstSeen)
+		target.extend(count.LastSeen)
+	}
+}
+
+func distanceToRange(ts time.Time, r TimeRange) time.Duration {
+	if !ts.Before(r.FirstSeen) && !ts.After(r.LastSeen) {
+		return 0
+	}
+	if ts.Before(r.FirstSeen) {
+		return r.FirstSeen.Sub(ts)
+	}
+	return ts.Sub(r.LastSeen)
+}
+
 func (a *Analyzer) Result() Result {
-	days := a.logRange.daysCovered()
 	return Result{
 		ValidEntries:   a.valid,
 		MalformedLines: a.malformed,
-		LogDays:        days,
+		LogDays:        a.logRange.daysCovered(),
 		ByLevel:        a.byLevel,
 		ByService:      a.byService,
-		Incidents:      a.buildIncidents(days),
+		Incidents:      a.buildIncidents(),
 	}
 }
 
-func (a *Analyzer) buildIncidents(logDays int) []Incident {
-	incidents := make([]Incident, 0, len(a.groups)) // never nil: JSON gets [] not null
-	for key, g := range a.groups {
-		incidents = append(incidents, Incident{
-			Type:      key.typ,
-			Severity:  key.level,
-			Total:      g.total,
-			BusiestDay: g.busiestDay(),
-			AveragePerDay: averagePerDay(g.total, logDays),
-			TimeRange:  g.TimeRange,
-			Services:   sortedServices(g.services),
-		})
+func (a *Analyzer) buildIncidents() []Incident {
+	incidents := make([]Incident, 0, len(a.groups))
+	for key, groups := range a.groups {
+		for _, g := range groups {
+			incidents = append(incidents, Incident{
+				Type:      key.typ,
+				Severity:  key.level,
+				Total:     g.total,
+				TimeRange: g.TimeRange,
+				Services:  sortedServices(g.services),
+			})
+		}
 	}
 	sortIncidents(incidents)
 	return incidents
 }
 
-// averagePerDay rounds to one decimal place.
-func averagePerDay(total, days int) float64 {
-	if days == 0 {
-		return 0
-	}
-	return math.Round(float64(total)/float64(days)*10) / 10
-}
-
-// sortedServices orders by count (highest first), then by name,
-// so the report is always the same for the same input.
 func sortedServices(services map[string]*ServiceCount) []ServiceCount {
 	list := make([]ServiceCount, 0, len(services))
 	for _, sc := range services {
@@ -326,7 +324,6 @@ func sortedServices(services map[string]*ServiceCount) []ServiceCount {
 	return list
 }
 
-// sortIncidents orders by severity, then total, then type name.
 func sortIncidents(list []Incident) {
 	sort.Slice(list, func(i, j int) bool {
 		if list[i].Severity != list[j].Severity {
@@ -335,6 +332,19 @@ func sortIncidents(list []Incident) {
 		if list[i].Total != list[j].Total {
 			return list[i].Total > list[j].Total
 		}
-		return list[i].Type < list[j].Type
+		if list[i].Type != list[j].Type {
+			return list[i].Type < list[j].Type
+		}
+		serviceI, serviceJ := "", ""
+		if len(list[i].Services) > 0 {
+			serviceI = list[i].Services[0].Service
+		}
+		if len(list[j].Services) > 0 {
+			serviceJ = list[j].Services[0].Service
+		}
+		if serviceI != serviceJ {
+			return serviceI < serviceJ
+		}
+		return list[i].FirstSeen.Before(list[j].FirstSeen)
 	})
 }
