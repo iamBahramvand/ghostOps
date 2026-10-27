@@ -18,6 +18,9 @@ import (
 
 func main() {
 	if err := run(); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return
+		}
 		fmt.Fprintln(os.Stderr, "ghostops:", err)
 		os.Exit(1)
 	}
@@ -39,6 +42,11 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	if cfg.jsonPath != "" {
+		if err := rejectInputOutputCollision(cfg.logPath, cfg.jsonPath); err != nil {
+			return err
+		}
+	}
 
 	if err := printReport(result, cfg.topServices); err != nil {
 		return err
@@ -58,7 +66,11 @@ func parseArgs() (config, error) {
 func parseConfig(args []string) (config, error) {
 	var cfg config
 	flags := flag.NewFlagSet("ghostops", flag.ContinueOnError)
-	flags.SetOutput(io.Discard)
+	flags.SetOutput(os.Stderr)
+	flags.Usage = func() {
+		fmt.Fprintln(flags.Output(), "usage: ghostops [-o report.json] [-top N] <logfile>")
+		flags.PrintDefaults()
+	}
 	flags.StringVar(&cfg.jsonPath, "o", "", "write the report as JSON to this file")
 	flags.IntVar(&cfg.topServices, "top", 3, "services listed per incident in the terminal report (0 = all)")
 	if err := flags.Parse(reorderArgs(args)); err != nil {
@@ -113,6 +125,7 @@ func analyzeFile(path string) (analyzer.Result, error) {
 type lineJob struct {
 	sequence uint64
 	text     string
+	tooLong  bool
 }
 
 type parsedJob struct {
@@ -135,7 +148,7 @@ func startPipeline(input io.Reader, workers int) (<-chan parsedJob, <-chan error
 	results := make(chan parsedJob, bufferSize)
 	scanErrors := make(chan error, 1)
 
-	go produceLines(logparser.NewLineScanner(input), jobs, scanErrors)
+	go produceLines(bufio.NewReader(input), jobs, scanErrors)
 	startParsers(workers, jobs, results)
 	return results, scanErrors
 }
@@ -165,14 +178,46 @@ func processReadyResults(a *analyzer.Analyzer, pending map[uint64]parsedJob, nex
 	}
 }
 
-func produceLines(scanner *bufio.Scanner, jobs chan<- lineJob, scanErrors chan<- error) {
+func produceLines(reader *bufio.Reader, jobs chan<- lineJob, scanErrors chan<- error) {
 	defer close(jobs)
 	var sequence uint64
-	for scanner.Scan() {
-		jobs <- lineJob{sequence: sequence, text: scanner.Text()}
+	for {
+		line, tooLong, err := readLine(reader)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			scanErrors <- err
+			return
+		}
+		jobs <- lineJob{sequence: sequence, text: line, tooLong: tooLong}
 		sequence++
 	}
-	scanErrors <- scanner.Err()
+	scanErrors <- nil
+}
+
+func readLine(reader *bufio.Reader) (string, bool, error) {
+	line := make([]byte, 0, logparser.MaxLineBytes)
+	tooLong := false
+	for {
+		fragment, isPrefix, err := reader.ReadLine()
+		if len(fragment) > 0 && !tooLong {
+			if len(line)+len(fragment) > logparser.MaxLineBytes {
+				tooLong = true
+			} else {
+				line = append(line, fragment...)
+			}
+		}
+		if err != nil {
+			if err == io.EOF && len(line) > 0 {
+				return string(line), tooLong, nil
+			}
+			return string(line), tooLong, err
+		}
+		if !isPrefix {
+			return string(line), tooLong, nil
+		}
+	}
 }
 
 func startParsers(workers int, jobs <-chan lineJob, results chan<- parsedJob) {
@@ -192,6 +237,9 @@ func parseJobs(jobs <-chan lineJob, results chan<- parsedJob, group *sync.WaitGr
 }
 
 func parseJob(job lineJob) parsedJob {
+	if job.tooLong {
+		return parsedJob{sequence: job.sequence, err: errors.New("line exceeds maximum size")}
+	}
 	entry, err := logparser.ParseLine(job.text)
 	return parsedJob{sequence: job.sequence, entry: entry, err: err}
 }
@@ -220,6 +268,24 @@ func saveJSON(path string, result analyzer.Result) error {
 		return err
 	}
 	return writeJSONAndClose(file, result)
+}
+
+func rejectInputOutputCollision(inputPath, outputPath string) error {
+	inputInfo, err := os.Stat(inputPath)
+	if err != nil {
+		return err
+	}
+	outputInfo, err := os.Stat(outputPath)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if os.SameFile(inputInfo, outputInfo) {
+		return errors.New("input and output paths must be different files")
+	}
+	return nil
 }
 
 func writeJSONAndClose(file *os.File, result analyzer.Result) error {

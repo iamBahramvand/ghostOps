@@ -135,8 +135,7 @@ type groupKey struct {
 }
 
 type group struct {
-	total     int
-	lastEvent time.Time
+	total int
 	TimeRange
 	services map[string]*ServiceCount
 }
@@ -151,7 +150,6 @@ func newIncidentGroup(e logparser.Entry) *group {
 
 func (g *group) add(e logparser.Entry) {
 	g.total++
-	g.lastEvent = e.Timestamp
 	g.extend(e.Timestamp)
 	g.serviceFor(e.Service).record(e.Timestamp)
 }
@@ -232,13 +230,22 @@ func (a *Analyzer) addToIncident(rule Rule, e logparser.Entry) {
 		a.groups[key] = mergeMatchingGroups(groups, matching, bestIndex, e)
 		return
 	}
-	a.groups[key] = append(groups, newIncidentGroup(e))
+	a.groups[key] = insertGroup(groups, newIncidentGroup(e))
 }
 
 func matchingGroups(groups []*group, ts time.Time, window time.Duration) ([]int, int) {
 	matching := make([]int, 0, len(groups))
 	bestIndex, bestGap := -1, time.Duration(1<<63-1)
-	for i, candidate := range groups {
+	minimum := ts.Add(-window)
+	maximum := ts.Add(window)
+	start := sort.Search(len(groups), func(i int) bool {
+		return !groups[i].FirstSeen.Before(minimum)
+	})
+	if start > 0 {
+		start--
+	}
+	for i := start; i < len(groups) && !groups[i].FirstSeen.After(maximum); i++ {
+		candidate := groups[i]
 		gap := distanceToRange(ts, candidate.TimeRange)
 		if gap <= window {
 			matching = append(matching, i)
@@ -250,7 +257,18 @@ func matchingGroups(groups []*group, ts time.Time, window time.Duration) ([]int,
 	return matching, bestIndex
 }
 
+func insertGroup(groups []*group, candidate *group) []*group {
+	position := sort.Search(len(groups), func(i int) bool {
+		return !groups[i].FirstSeen.Before(candidate.FirstSeen)
+	})
+	groups = append(groups, nil)
+	copy(groups[position+1:], groups[position:])
+	groups[position] = candidate
+	return groups
+}
+
 func mergeMatchingGroups(groups []*group, matching []int, bestIndex int, e logparser.Entry) []*group {
+	firstSeen := groups[bestIndex].FirstSeen
 	groups[bestIndex].add(e)
 	for i := len(matching) - 1; i >= 0; i-- {
 		index := matching[i]
@@ -263,14 +281,16 @@ func mergeMatchingGroups(groups []*group, matching []int, bestIndex int, e logpa
 			bestIndex--
 		}
 	}
+	if len(matching) > 1 || !groups[bestIndex].FirstSeen.Equal(firstSeen) {
+		sort.Slice(groups, func(i, j int) bool {
+			return groups[i].FirstSeen.Before(groups[j].FirstSeen)
+		})
+	}
 	return groups
 }
 
 func (g *group) merge(other *group) {
 	g.total += other.total
-	if other.lastEvent.After(g.lastEvent) {
-		g.lastEvent = other.lastEvent
-	}
 	g.extend(other.FirstSeen)
 	g.extend(other.LastSeen)
 	for service, count := range other.services {

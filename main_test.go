@@ -103,6 +103,30 @@ func TestSaveJSONReturnsCreateError(t *testing.T) {
 	}
 }
 
+func TestRejectInputOutputCollision(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "input.log")
+	if err := os.WriteFile(path, []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := rejectInputOutputCollision(path, path); err == nil {
+		t.Fatal("same input and output file was accepted")
+	}
+	if err := rejectInputOutputCollision(path, filepath.Join(t.TempDir(), "new.json")); err != nil {
+		t.Fatalf("new output path rejected: %v", err)
+	}
+}
+
+func TestAnalyzeLinesHandlesLongLineAndMissingFinalNewline(t *testing.T) {
+	input := strings.Repeat("x", 2<<20) + "\n" + "2026-10-01T10:00:00Z ERROR db-service SQL failed"
+	result, err := analyzeLines(strings.NewReader(input), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.MalformedLines != 1 || result.ValidEntries != 1 {
+		t.Fatalf("result counts = valid %d malformed %d, want 1/1", result.ValidEntries, result.MalformedLines)
+	}
+}
+
 func TestParseConfig(t *testing.T) {
 	tests := []struct {
 		name    string
