@@ -1,4 +1,3 @@
-// GhostOps: streaming log analysis CLI.
 package main
 
 import (
@@ -20,15 +19,12 @@ func main() {
 	}
 }
 
-// config holds what the user asked for on the command line.
 type config struct {
 	logPath     string
-	jsonPath    string // empty means no JSON file
-	topServices int    // services per incident in the terminal report
+	jsonPath    string
+	topServices int
 }
 
-// run only sequences the steps; each step lives in its own function.
-// It returns the first error it meets (nil means success).
 func run() error {
 	cfg, err := parseArgs()
 	if err != nil {
@@ -51,10 +47,6 @@ func run() error {
 
 var errUsage = errors.New("usage: ghostops [-o report.json] [-top N] <logfile>")
 
-// parseArgs reads the command line. Flags may come before or after the file:
-//
-//	ghostops -o report.json file.log
-//	ghostops file.log -o report.json
 func parseArgs() (config, error) {
 	var cfg config
 	flag.StringVar(&cfg.jsonPath, "o", "", "write the report as JSON to this file")
@@ -66,7 +58,6 @@ func parseArgs() (config, error) {
 	}
 	cfg.logPath = flag.Arg(0)
 
-	// flag.Parse stops at the file name, so read the flags written after it.
 	if err := flag.CommandLine.Parse(flag.Args()[1:]); err != nil {
 		return config{}, err
 	}
@@ -79,7 +70,6 @@ func parseArgs() (config, error) {
 	return cfg, nil
 }
 
-// analyzeFile opens and closes the file; reading is done elsewhere.
 func analyzeFile(path string) (analyzer.Result, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -90,8 +80,6 @@ func analyzeFile(path string) (analyzer.Result, error) {
 	return analyzeLines(file)
 }
 
-// analyzeLines reads one line at a time, so memory does not grow
-// with the size of the input.
 func analyzeLines(input io.Reader) (analyzer.Result, error) {
 	a := analyzer.New(analyzer.DefaultRules())
 	scanner := logparser.NewLineScanner(input)
@@ -105,7 +93,6 @@ func analyzeLines(input io.Reader) (analyzer.Result, error) {
 	return a.Result(), nil
 }
 
-// feedLine gives one line to the analyzer: counted as valid or malformed.
 func feedLine(a *analyzer.Analyzer, line string) {
 	entry, err := logparser.ParseLine(line)
 	if err != nil {
@@ -128,7 +115,6 @@ func saveJSON(path string, result analyzer.Result) error {
 	return writeJSONAndClose(file, result)
 }
 
-// writeJSONAndClose makes sure a failed Close is reported too.
 func writeJSONAndClose(file *os.File, result analyzer.Result) error {
 	var jsonReport report.Reporter = report.JSONReporter{}
 	if err := jsonReport.Write(file, result); err != nil {
