@@ -141,10 +141,12 @@ type group struct {
 	services map[string]*ServiceCount
 }
 
-func newGroup() *group {
-	return &group{
+func newIncidentGroup(e logparser.Entry) *group {
+	g := &group{
 		services: make(map[string]*ServiceCount),
 	}
+	g.add(e)
+	return g
 }
 
 func (g *group) add(e logparser.Entry) {
@@ -225,36 +227,43 @@ func (a *Analyzer) firstMatch(e logparser.Entry) Rule {
 func (a *Analyzer) addToIncident(rule Rule, e logparser.Entry) {
 	key := groupKey{rule.Name(), e.Level}
 	groups := a.groups[key]
+	matching, bestIndex := matchingGroups(groups, e.Timestamp, rule.GroupWindow())
+	if bestIndex >= 0 {
+		a.groups[key] = mergeMatchingGroups(groups, matching, bestIndex, e)
+		return
+	}
+	a.groups[key] = append(groups, newIncidentGroup(e))
+}
+
+func matchingGroups(groups []*group, ts time.Time, window time.Duration) ([]int, int) {
 	matching := make([]int, 0, len(groups))
 	bestIndex, bestGap := -1, time.Duration(1<<63-1)
 	for i, candidate := range groups {
-		gap := distanceToRange(e.Timestamp, candidate.TimeRange)
-		if gap <= rule.GroupWindow() {
+		gap := distanceToRange(ts, candidate.TimeRange)
+		if gap <= window {
 			matching = append(matching, i)
 			if gap < bestGap {
 				bestIndex, bestGap = i, gap
 			}
 		}
 	}
-	if bestIndex >= 0 {
-		groups[bestIndex].add(e)
-		for i := len(matching) - 1; i >= 0; i-- {
-			index := matching[i]
-			if index == bestIndex {
-				continue
-			}
-			groups[bestIndex].merge(groups[index])
-			groups = append(groups[:index], groups[index+1:]...)
-			if index < bestIndex {
-				bestIndex--
-			}
+	return matching, bestIndex
+}
+
+func mergeMatchingGroups(groups []*group, matching []int, bestIndex int, e logparser.Entry) []*group {
+	groups[bestIndex].add(e)
+	for i := len(matching) - 1; i >= 0; i-- {
+		index := matching[i]
+		if index == bestIndex {
+			continue
 		}
-		a.groups[key] = groups
-		return
+		groups[bestIndex].merge(groups[index])
+		groups = append(groups[:index], groups[index+1:]...)
+		if index < bestIndex {
+			bestIndex--
+		}
 	}
-	g := newGroup()
-	g.add(e)
-	a.groups[key] = append(groups, g)
+	return groups
 }
 
 func (g *group) merge(other *group) {

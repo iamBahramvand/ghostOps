@@ -101,7 +101,7 @@ func parseLevel(text string) (Level, error) {
 }
 
 func parseService(text string) (string, error) {
-	if !isValidService(text) {
+	if !validService(text) {
 		return "", fmt.Errorf("invalid service name %q", text)
 	}
 	return text, nil
@@ -114,16 +114,16 @@ func parseMessage(text string) (string, error) {
 	return text, nil
 }
 
-func isValidService(name string) bool {
+func validService(name string) bool {
 	for _, word := range strings.Split(name, "-") {
-		if !isLowerWord(word) {
+		if !lowerWord(word) {
 			return false
 		}
 	}
 	return true
 }
 
-func isLowerWord(word string) bool {
+func lowerWord(word string) bool {
 	if word == "" {
 		return false
 	}
