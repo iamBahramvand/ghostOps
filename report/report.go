@@ -1,8 +1,8 @@
-// Package report renders an analyzer.Result in different formats.
 package report
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,30 +14,62 @@ import (
 	"ghostops/logparser"
 )
 
-// lineWidth is the width of the separator lines in the text report.
 const lineWidth = 78
 
-// Reporter writes a result to w. Output must be deterministic.
 type Reporter interface {
 	Write(w io.Writer, res analyzer.Result) error
 }
 
-// TextReporter prints a report for people reading a terminal.
 type TextReporter struct {
-	TopServices int // services listed per incident; 0 means all of them
+	TopServices int
 }
 
-// JSONReporter writes the complete result as JSON (never shortened).
 type JSONReporter struct{}
 
 func (JSONReporter) Write(w io.Writer, res analyzer.Result) error {
-	encoder := json.NewEncoder(w)
-	encoder.SetIndent("", "  ")
-	return encoder.Encode(res) // map keys are sorted by encoding/json
+	var b bytes.Buffer
+	b.WriteString("{\n")
+	writeJSONField(&b, "valid_entries", res.ValidEntries, true)
+	writeJSONField(&b, "malformed_lines", res.MalformedLines, true)
+	writeJSONField(&b, "log_days", res.LogDays, true)
+	writeJSONField(&b, "by_level", res.ByLevel, true)
+	writeJSONField(&b, "by_service", res.ByService, true)
+	b.WriteString("  \"incidents\": [")
+	if len(res.Incidents) > 0 {
+		b.WriteByte('\n')
+		for i, incident := range res.Incidents {
+			data, err := json.Marshal(incident)
+			if err != nil {
+				return err
+			}
+			b.WriteString("    ")
+			b.Write(data)
+			if i+1 < len(res.Incidents) {
+				b.WriteByte(',')
+			}
+			b.WriteByte('\n')
+		}
+		b.WriteString("  ")
+	}
+	b.WriteString("]\n}\n")
+	_, err := w.Write(b.Bytes())
+	return err
+}
+
+func writeJSONField(b *bytes.Buffer, name string, value any, comma bool) {
+	data, _ := json.MarshalIndent(value, "  ", "  ")
+	b.WriteString("  \"")
+	b.WriteString(name)
+	b.WriteString("\": ")
+	b.Write(data)
+	if comma {
+		b.WriteByte(',')
+	}
+	b.WriteByte('\n')
 }
 
 func (r TextReporter) Write(w io.Writer, res analyzer.Result) error {
-	bw := bufio.NewWriter(w) // remembers the first write error
+	bw := bufio.NewWriter(w)
 
 	writeTitle(bw)
 	writeEntries(bw, res)
@@ -45,7 +77,7 @@ func (r TextReporter) Write(w io.Writer, res analyzer.Result) error {
 	writeCounts(bw, "By service", sortedKeys(res.ByService), res.ByService, res.ValidEntries)
 	r.writeIncidents(bw, res.Incidents)
 
-	return bw.Flush() // returns that error, if any
+	return bw.Flush()
 }
 
 func writeTitle(bw *bufio.Writer) {
@@ -60,7 +92,6 @@ func writeEntries(bw *bufio.Writer, res analyzer.Result) {
 	fmt.Fprintf(bw, "  %-24s %7d\n", "days covered", res.LogDays)
 }
 
-// writeCounts prints "name  count  percent" lines in the order given by names.
 func writeCounts(bw *bufio.Writer, title string, names []string, counts map[string]int, total int) {
 	fmt.Fprintf(bw, "\n%s\n", title)
 	if len(names) == 0 {
@@ -86,14 +117,17 @@ func (r TextReporter) writeIncidents(bw *bufio.Writer, incidents []analyzer.Inci
 func (r TextReporter) writeIncident(bw *bufio.Writer, number int, incident analyzer.Incident) {
 	fmt.Fprintln(bw, strings.Repeat("-", lineWidth))
 	fmt.Fprintf(bw, "#%d  [%s] %s\n", number, incident.Severity, incident.Type)
-	fmt.Fprintf(bw, "    total: %d | busiest day: %s (%d entries, avg %.1f/day)\n",
-		incident.Total, incident.BusiestDay.Date, incident.BusiestDay.Count, incident.AveragePerDay)
-	fmt.Fprintf(bw, "    period: %s\n", formatRange(incident.TimeRange))
-	writeServiceTable(bw, incident.Services, r.TopServices)
+	if incident.Total > 1 {
+		fmt.Fprintf(bw, "    frequency: %d\n", incident.Total)
+		fmt.Fprintf(bw, "    time range: %s\n", formatRange(incident.TimeRange))
+		writeServiceTable(bw, incident.Services, r.TopServices)
+		return
+	}
+	if len(incident.Services) > 0 {
+		fmt.Fprintf(bw, "    affected service: %s\n", incident.Services[0].Service)
+	}
 }
 
-// writeServiceTable lists the most affected services and says how many
-// were left out, so the numbers still add up to the incident total.
 func writeServiceTable(bw *bufio.Writer, services []analyzer.ServiceCount, top int) {
 	shown, hidden := splitTop(services, top)
 
@@ -106,7 +140,6 @@ func writeServiceTable(bw *bufio.Writer, services []analyzer.ServiceCount, top i
 	}
 }
 
-// splitTop splits the list after the first top items (0 keeps all).
 func splitTop(services []analyzer.ServiceCount, top int) (shown, hidden []analyzer.ServiceCount) {
 	if top <= 0 || top >= len(services) {
 		return services, nil
@@ -122,7 +155,6 @@ func sumCounts(services []analyzer.ServiceCount) int {
 	return total
 }
 
-// formatRange prints one time when both ends are the same.
 func formatRange(t analyzer.TimeRange) string {
 	first := t.FirstSeen.Format(time.RFC3339)
 	if t.FirstSeen.Equal(t.LastSeen) {
@@ -138,7 +170,6 @@ func percent(part, total int) float64 {
 	return float64(part) * 100 / float64(total)
 }
 
-// levelNames lists the level names from INFO to FATAL.
 func levelNames() []string {
 	names := make([]string, 0, len(logparser.AllLevels))
 	for _, level := range logparser.AllLevels {
@@ -147,7 +178,6 @@ func levelNames() []string {
 	return names
 }
 
-// sortedKeys gives map keys in alphabetical order (Go maps have no order).
 func sortedKeys(m map[string]int) []string {
 	keys := make([]string, 0, len(m))
 	for key := range m {
