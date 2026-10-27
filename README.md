@@ -47,12 +47,6 @@ Every valid line has this form:
 <RFC3339 timestamp> <LEVEL> <service-name> <message>
 ```
 
-Example:
-
-```text
-2026-10-01T05:10:00Z ERROR order-service SQL syntax error while executing query
-```
-
 Malformed lines are skipped without stopping the analysis and are counted in `malformed_lines`. Lines larger than the 1 MB parser limit are also counted as malformed. A final line does not need a trailing newline. The output path must be different from the input path; this prevents `-o input.log` from truncating the source before the report is written.
 
 ## Incident rules
@@ -94,7 +88,7 @@ There are two different meanings of “same incident” in the report:
 
 The terminal report combines the second case. A singleton printed once keeps the original compact form. If the same singleton occurs repeatedly, it is printed once with `frequency`. Its time is intentionally omitted because that row combines separate events. Multi-entry groups retain their frequency, `time`, and service table.
 
-This separation keeps the incident semantics honest while making a large terminal report readable. The JSON still contains every detailed incident group, so the compressed terminal view does not remove information from the machine-readable report.
+This separation keeps the incident semantics honest while making a large report readable. Singleton repetition is collapsed in both terminal and JSON output. Multi-entry groups remain detailed in JSON, including their timestamps.
 
 ### Incident fields
 
@@ -168,7 +162,6 @@ The analysis pipeline has three stages:
 
 Channels are closed after their producers finish. A `sync.WaitGroup` waits for all parser workers before the result channel is closed. This prevents lost lines, premature shutdown, and deadlocks. The analyzer itself remains single-owner state, so grouping and deterministic report ordering do not require locks.
 
-The concurrency lesson sample is kept in `concurrency/`.
 
 ### `logparser`
 
@@ -289,7 +282,7 @@ go run . example.log -o example.json
 go run -race . example.log -o example.json
 ```
 
-The project demonstrates streaming input, `io.Reader` usage, parsing and validation, keyword matching, maps and slices, ordered rules, time-based grouping, goroutines, channels, `sync.WaitGroup`, deterministic aggregation, race detection, and error handling. The concurrency lesson sample is kept in `concurrency/`.
+The project demonstrates streaming input, `io.Reader` usage, parsing and validation, keyword matching, maps and slices, ordered rules, time-based grouping, goroutines, channels, `sync.WaitGroup`, deterministic aggregation, race detection, and error handling.
 
 ## Testing and coverage
 
@@ -323,26 +316,6 @@ Show statement coverage per package:
 
 ```bash
 go test -cover ./...
-```
-
-Create a coverage profile and inspect the combined total:
-
-```bash
-go test -coverpkg=./... -coverprofile=coverage.out ./...
-go tool cover -func=coverage.out
-```
-
-The last command prints a `total:` line with the overall percentage. Generate an HTML report with:
-
-```bash
-go tool cover -html=coverage.out -o coverage.html
-```
-
-For the project packages only, use this focused profile to avoid counting the teaching sample and the archived `final/` copy:
-
-```bash
-go test -coverprofile=core.out . ./analyzer ./logparser ./report
-go tool cover -func=core.out
 ```
 
 The current focused tests cover the main packages at approximately 81.2% for the CLI pipeline, 86.7% for the analyzer, 87.0% for the parser, and 95.7% for reporting, with a combined focused total of about 86.8%. The tests explicitly cover empty input, malformed-only input, oversized lines, missing files, invalid output paths, input/output collisions, no-incident reports, and writer failures. Coverage measures executed statements; passing tests and high coverage do not replace assertions about behavior.

@@ -28,6 +28,7 @@ type JSONReporter struct{}
 
 func (JSONReporter) Write(w io.Writer, res analyzer.Result) error {
 	var b bytes.Buffer
+	incidents := aggregateJSONIncidents(res.Incidents)
 	b.WriteString("{\n")
 	writeJSONField(&b, "valid_entries", res.ValidEntries, true)
 	writeJSONField(&b, "malformed_lines", res.MalformedLines, true)
@@ -35,16 +36,16 @@ func (JSONReporter) Write(w io.Writer, res analyzer.Result) error {
 	writeJSONField(&b, "by_level", res.ByLevel, true)
 	writeJSONField(&b, "by_service", res.ByService, true)
 	b.WriteString("  \"incidents\": [")
-	if len(res.Incidents) > 0 {
+	if len(incidents) > 0 {
 		b.WriteByte('\n')
-		for i, incident := range res.Incidents {
+		for i, incident := range incidents {
 			data, err := json.Marshal(incident)
 			if err != nil {
 				return err
 			}
 			b.WriteString("    ")
 			b.Write(data)
-			if i+1 < len(res.Incidents) {
+			if i+1 < len(incidents) {
 				b.WriteByte(',')
 			}
 			b.WriteByte('\n')
@@ -54,6 +55,29 @@ func (JSONReporter) Write(w io.Writer, res analyzer.Result) error {
 	b.WriteString("]\n}\n")
 	_, err := w.Write(b.Bytes())
 	return err
+}
+
+func aggregateJSONIncidents(incidents []analyzer.Incident) []analyzer.Incident {
+	result := make([]analyzer.Incident, 0, len(incidents))
+	index := make(map[string]int)
+	for _, incident := range incidents {
+		if incident.Total > 1 || len(incident.Services) == 0 {
+			result = append(result, incident)
+			continue
+		}
+		service := incident.Services[0].Service
+		key := fmt.Sprintf("%d\x00%s\x00%s", incident.Severity, incident.Type, service)
+		if existing, ok := index[key]; ok {
+			result[existing].Total++
+			result[existing].Services[0].Count++
+			continue
+		}
+		incident.Aggregated = true
+		incident.Services = []analyzer.ServiceCount{{Service: service, Count: 1}}
+		index[key] = len(result)
+		result = append(result, incident)
+	}
+	return result
 }
 
 func writeJSONField(b *bytes.Buffer, name string, value any, comma bool) {

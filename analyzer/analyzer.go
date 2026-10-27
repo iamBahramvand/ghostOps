@@ -130,7 +130,8 @@ type Incident struct {
 	Severity logparser.Level `json:"severity"`
 	Total    int             `json:"total"`
 	TimeRange
-	Services []ServiceCount `json:"services"`
+	Services   []ServiceCount `json:"services"`
+	Aggregated bool           `json:"-"`
 }
 
 func (i Incident) MarshalJSON() ([]byte, error) {
@@ -149,8 +150,10 @@ func (i Incident) MarshalJSON() ([]byte, error) {
 	j := incidentJSON{Type: i.Type, Severity: i.Severity, AffectedServices: services}
 	if i.Total > 1 {
 		j.Frequency = &i.Total
-		j.StartTime = &i.FirstSeen
-		j.EndTime = &i.LastSeen
+		if !i.Aggregated {
+			j.StartTime = &i.FirstSeen
+			j.EndTime = &i.LastSeen
+		}
 	}
 	return json.Marshal(j)
 }
