@@ -65,7 +65,7 @@ func TestTextReporterIncludesMultiEntryDetails(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := output.String()
-	for _, want := range []string{"frequency: 3", "time range:", "+ 1 more services"} {
+	for _, want := range []string{"frequency: 3", "time:", "+ 1 more services"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("terminal report does not contain %q", want)
 		}

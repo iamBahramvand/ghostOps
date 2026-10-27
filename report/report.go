@@ -104,14 +104,76 @@ func writeCounts(bw *bufio.Writer, title string, names []string, counts map[stri
 }
 
 func (r TextReporter) writeIncidents(bw *bufio.Writer, incidents []analyzer.Incident) {
-	fmt.Fprintf(bw, "\nIncidents (%d)\n", len(incidents))
-	if len(incidents) == 0 {
+	singletons := aggregateSingletons(incidents)
+	detailed := make([]analyzer.Incident, 0, len(incidents))
+	for _, incident := range incidents {
+		if incident.Total > 1 {
+			detailed = append(detailed, incident)
+		}
+	}
+	fmt.Fprintf(bw, "\nIncidents (%d)\n", len(singletons)+len(detailed))
+	if len(singletons) == 0 && len(detailed) == 0 {
 		fmt.Fprintln(bw, "  (none detected)")
 		return
 	}
-	for i, incident := range incidents {
-		r.writeIncident(bw, i+1, incident)
+	number := 1
+	for _, summary := range singletons {
+		r.writeSingletonSummary(bw, number, summary)
+		number++
 	}
+	for _, incident := range detailed {
+		r.writeIncident(bw, number, incident)
+		number++
+	}
+}
+
+type singletonKey struct {
+	typ      string
+	severity logparser.Level
+	service  string
+}
+
+type singletonSummary struct {
+	typ      string
+	severity logparser.Level
+	service  string
+	count    int
+}
+
+func aggregateSingletons(incidents []analyzer.Incident) []singletonSummary {
+	counts := make(map[singletonKey]int)
+	for _, incident := range incidents {
+		if incident.Total > 1 || len(incident.Services) == 0 {
+			continue
+		}
+		service := incident.Services[0].Service
+		counts[singletonKey{incident.Type, incident.Severity, service}]++
+	}
+	summaries := make([]singletonSummary, 0, len(counts))
+	for key, count := range counts {
+		summaries = append(summaries, singletonSummary{key.typ, key.severity, key.service, count})
+	}
+	sort.Slice(summaries, func(i, j int) bool {
+		if summaries[i].severity != summaries[j].severity {
+			return summaries[i].severity > summaries[j].severity
+		}
+		if summaries[i].typ != summaries[j].typ {
+			return summaries[i].typ < summaries[j].typ
+		}
+		return summaries[i].service < summaries[j].service
+	})
+	return summaries
+}
+
+func (r TextReporter) writeSingletonSummary(bw *bufio.Writer, number int, summary singletonSummary) {
+	fmt.Fprintln(bw, strings.Repeat("-", lineWidth))
+	fmt.Fprintf(bw, "#%d  [%s] %s\n", number, summary.severity, summary.typ)
+	if summary.count == 1 {
+		fmt.Fprintf(bw, "    affected service: %s\n", summary.service)
+		return
+	}
+	fmt.Fprintf(bw, "    affected service: %s\n", summary.service)
+	fmt.Fprintf(bw, "    frequency: %d\n", summary.count)
 }
 
 func (r TextReporter) writeIncident(bw *bufio.Writer, number int, incident analyzer.Incident) {
@@ -119,7 +181,7 @@ func (r TextReporter) writeIncident(bw *bufio.Writer, number int, incident analy
 	fmt.Fprintf(bw, "#%d  [%s] %s\n", number, incident.Severity, incident.Type)
 	if incident.Total > 1 {
 		fmt.Fprintf(bw, "    frequency: %d\n", incident.Total)
-		fmt.Fprintf(bw, "    time range: %s\n", formatRange(incident.TimeRange))
+		fmt.Fprintf(bw, "    time: %s\n", formatRange(incident.TimeRange))
 		writeServiceTable(bw, incident.Services, r.TopServices)
 		return
 	}
@@ -131,7 +193,7 @@ func (r TextReporter) writeIncident(bw *bufio.Writer, number int, incident analy
 func writeServiceTable(bw *bufio.Writer, services []analyzer.ServiceCount, top int) {
 	shown, hidden := splitTop(services, top)
 
-	fmt.Fprintf(bw, "    %-22s %5s  %s\n", "service", "count", "time range")
+	fmt.Fprintf(bw, "    %-22s %5s  %s\n", "service", "count", "time")
 	for _, sc := range shown {
 		fmt.Fprintf(bw, "    %-22s %5d  %s\n", sc.Service, sc.Count, formatRange(sc.TimeRange))
 	}
@@ -160,7 +222,7 @@ func formatRange(t analyzer.TimeRange) string {
 	if t.FirstSeen.Equal(t.LastSeen) {
 		return first
 	}
-	return first + " -> " + t.LastSeen.Format(time.RFC3339)
+	return first + " till " + t.LastSeen.Format(time.RFC3339)
 }
 
 func percent(part, total int) float64 {

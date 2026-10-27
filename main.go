@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -197,7 +198,7 @@ func produceLines(reader *bufio.Reader, jobs chan<- lineJob, scanErrors chan<- e
 }
 
 func readLine(reader *bufio.Reader) (string, bool, error) {
-	line := make([]byte, 0, logparser.MaxLineBytes)
+	line := make([]byte, 0, 64*1024)
 	tooLong := false
 	for {
 		fragment, isPrefix, err := reader.ReadLine()
@@ -263,11 +264,27 @@ func printReport(result analyzer.Result, topServices int) error {
 }
 
 func saveJSON(path string, result analyzer.Result) error {
-	file, err := os.Create(path)
+	directory := filepath.Dir(path)
+	base := filepath.Base(path)
+	file, err := os.CreateTemp(directory, "."+base+".tmp-*")
 	if err != nil {
 		return err
 	}
-	return writeJSONAndClose(file, result)
+	temporary := file.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(temporary)
+		}
+	}()
+	if err := writeJSONAndClose(file, result); err != nil {
+		return err
+	}
+	if err := os.Rename(temporary, path); err != nil {
+		return err
+	}
+	cleanup = false
+	return nil
 }
 
 func rejectInputOutputCollision(inputPath, outputPath string) error {

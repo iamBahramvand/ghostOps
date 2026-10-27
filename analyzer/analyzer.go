@@ -15,15 +15,28 @@ type Rule interface {
 	GroupWindow() time.Duration
 }
 
+const defaultIncidentMaxSpan = time.Hour
+
+type spanRule interface{ MaxSpan() time.Duration }
+
+func ruleMaxSpan(rule Rule) time.Duration {
+	if bounded, ok := rule.(spanRule); ok {
+		return bounded.MaxSpan()
+	}
+	return 0
+}
+
 type keywordRule struct {
 	name     string
 	minLevel logparser.Level
 	keywords []string
 	window   time.Duration
+	maxSpan  time.Duration
 }
 
 func (r keywordRule) Name() string               { return r.name }
 func (r keywordRule) GroupWindow() time.Duration { return r.window }
+func (r keywordRule) MaxSpan() time.Duration     { return r.maxSpan }
 
 func (r keywordRule) Matches(e logparser.Entry) bool {
 	if e.Level < r.minLevel {
@@ -34,31 +47,53 @@ func (r keywordRule) Matches(e logparser.Entry) bool {
 
 func containsAny(text string, words []string) bool {
 	for _, word := range words {
-		if strings.Contains(text, word) {
+		if containsKeyword(text, word) {
 			return true
 		}
 	}
 	return false
 }
 
+func containsKeyword(text, word string) bool {
+	for start := 0; start <= len(text)-len(word); {
+		index := strings.Index(text[start:], word)
+		if index < 0 {
+			return false
+		}
+		index += start
+		end := index + len(word)
+		if (index == 0 || !isKeywordChar(text[index-1])) && (end == len(text) || !isKeywordChar(text[end])) {
+			return true
+		}
+		start = index + 1
+	}
+	return false
+}
+
+func isKeywordChar(ch byte) bool {
+	return (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_'
+}
+
 type levelRule struct {
-	name   string
-	level  logparser.Level
-	window time.Duration
+	name    string
+	level   logparser.Level
+	window  time.Duration
+	maxSpan time.Duration
 }
 
 func (r levelRule) Name() string                   { return r.name }
 func (r levelRule) Matches(e logparser.Entry) bool { return e.Level == r.level }
 func (r levelRule) GroupWindow() time.Duration     { return r.window }
+func (r levelRule) MaxSpan() time.Duration         { return r.maxSpan }
 
 func DefaultRules() []Rule {
 	return []Rule{
-		keywordRule{"Database Connectivity", logparser.Error, []string{"connection pool", "connect to database"}, 10 * time.Minute},
-		keywordRule{"SQL Error", logparser.Error, []string{"sql"}, 10 * time.Minute},
-		keywordRule{"Payment Gateway Failure", logparser.Error, []string{"payment gateway"}, 10 * time.Minute},
-		keywordRule{"Unhandled Exception", logparser.Error, []string{"exception"}, 10 * time.Minute},
-		keywordRule{"Resource Pressure", logparser.Warn, []string{"memory usage", "out of memory"}, 15 * time.Minute},
-		levelRule{"Fatal Error", logparser.Fatal, 10 * time.Minute},
+		keywordRule{"Database Connectivity", logparser.Error, []string{"connection pool", "connect to database"}, 10 * time.Minute, defaultIncidentMaxSpan},
+		keywordRule{"SQL Error", logparser.Error, []string{"sql"}, 10 * time.Minute, defaultIncidentMaxSpan},
+		keywordRule{"Payment Gateway Failure", logparser.Error, []string{"payment gateway"}, 10 * time.Minute, defaultIncidentMaxSpan},
+		keywordRule{"Unhandled Exception", logparser.Error, []string{"exception"}, 10 * time.Minute, defaultIncidentMaxSpan},
+		keywordRule{"Resource Pressure", logparser.Warn, []string{"memory usage", "out of memory"}, 15 * time.Minute, defaultIncidentMaxSpan},
+		levelRule{"Fatal Error", logparser.Fatal, 10 * time.Minute, defaultIncidentMaxSpan},
 	}
 }
 
@@ -225,15 +260,16 @@ func (a *Analyzer) firstMatch(e logparser.Entry) Rule {
 func (a *Analyzer) addToIncident(rule Rule, e logparser.Entry) {
 	key := groupKey{rule.Name(), e.Level}
 	groups := a.groups[key]
-	matching, bestIndex := matchingGroups(groups, e.Timestamp, rule.GroupWindow())
+	maxSpan := ruleMaxSpan(rule)
+	matching, bestIndex := matchingGroups(groups, e.Timestamp, rule.GroupWindow(), maxSpan)
 	if bestIndex >= 0 {
-		a.groups[key] = mergeMatchingGroups(groups, matching, bestIndex, e)
+		a.groups[key] = mergeMatchingGroups(groups, matching, bestIndex, e, maxSpan)
 		return
 	}
 	a.groups[key] = insertGroup(groups, newIncidentGroup(e))
 }
 
-func matchingGroups(groups []*group, ts time.Time, window time.Duration) ([]int, int) {
+func matchingGroups(groups []*group, ts time.Time, window, maxSpan time.Duration) ([]int, int) {
 	matching := make([]int, 0, len(groups))
 	bestIndex, bestGap := -1, time.Duration(1<<63-1)
 	minimum := ts.Add(-window)
@@ -247,7 +283,7 @@ func matchingGroups(groups []*group, ts time.Time, window time.Duration) ([]int,
 	for i := start; i < len(groups) && !groups[i].FirstSeen.After(maximum); i++ {
 		candidate := groups[i]
 		gap := distanceToRange(ts, candidate.TimeRange)
-		if gap <= window {
+		if gap <= window && canExtend(candidate.TimeRange, ts, maxSpan) {
 			matching = append(matching, i)
 			if gap < bestGap {
 				bestIndex, bestGap = i, gap
@@ -267,7 +303,10 @@ func insertGroup(groups []*group, candidate *group) []*group {
 	return groups
 }
 
-func mergeMatchingGroups(groups []*group, matching []int, bestIndex int, e logparser.Entry) []*group {
+func mergeMatchingGroups(groups []*group, matching []int, bestIndex int, e logparser.Entry, maxSpan time.Duration) []*group {
+	if len(matching) > 1 && !canMerge(groups, matching, bestIndex, e, maxSpan) {
+		matching = []int{bestIndex}
+	}
 	firstSeen := groups[bestIndex].FirstSeen
 	groups[bestIndex].add(e)
 	for i := len(matching) - 1; i >= 0; i-- {
@@ -287,6 +326,36 @@ func mergeMatchingGroups(groups []*group, matching []int, bestIndex int, e logpa
 		})
 	}
 	return groups
+}
+
+func canExtend(r TimeRange, ts time.Time, maxSpan time.Duration) bool {
+	if maxSpan <= 0 {
+		return true
+	}
+	first, last := r.FirstSeen, r.LastSeen
+	if ts.Before(first) {
+		first = ts
+	}
+	if ts.After(last) {
+		last = ts
+	}
+	return last.Sub(first) <= maxSpan
+}
+
+func canMerge(groups []*group, matching []int, bestIndex int, e logparser.Entry, maxSpan time.Duration) bool {
+	if maxSpan <= 0 {
+		return true
+	}
+	merged := groups[bestIndex].TimeRange
+	merged.extend(e.Timestamp)
+	for _, index := range matching {
+		if index == bestIndex {
+			continue
+		}
+		merged.extend(groups[index].FirstSeen)
+		merged.extend(groups[index].LastSeen)
+	}
+	return merged.LastSeen.Sub(merged.FirstSeen) <= maxSpan
 }
 
 func (g *group) merge(other *group) {
@@ -312,13 +381,14 @@ func distanceToRange(ts time.Time, r TimeRange) time.Duration {
 }
 
 func (a *Analyzer) Result() Result {
+	incidents := a.buildIncidents()
 	return Result{
 		ValidEntries:   a.valid,
 		MalformedLines: a.malformed,
 		LogDays:        a.logRange.daysCovered(),
 		ByLevel:        a.byLevel,
 		ByService:      a.byService,
-		Incidents:      a.buildIncidents(),
+		Incidents:      incidents,
 	}
 }
 
